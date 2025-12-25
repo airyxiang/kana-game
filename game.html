@@ -15,15 +15,6 @@
         </div>
 
         <div class="controls">
-          <label class="control">
-            <span>Script</span>
-            <select id="scriptMode">
-              <option value="hiragana">Hiragana</option>
-              <option value="katakana">Katakana</option>
-              <option value="both" selected>Both</option>
-            </select>
-          </label>
-
           <label class="control checkbox">
             <input id="showHints" type="checkbox" />
             <span>Show romaji</span>
@@ -31,7 +22,17 @@
 
           <label class="control checkbox">
             <input id="lengthOnly" type="checkbox" />
-            <span>Length-only (no speed up)</span>
+            <span>No Speed Up</span>
+          </label>
+
+          <label class="control checkbox">
+            <input id="practiceOnly" type="checkbox" />
+            <span>Practice Mode</span>
+          </label>
+
+          <label class="control">
+            <span>Fall speed</span>
+            <input id="fallSpeed" type="number" min="0.5" max="3" step="0.1" />
           </label>
 
           <label class="control">
@@ -69,24 +70,20 @@
         </div>
 
         <div class="bottom">
-          <div class="inputRow">
-            <input
-              id="romajiInput"
-              type="text"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="Type romaji here…"
-              inputmode="latin"
-            />
-            <button id="clearInputBtn" class="btn" type="button">Clear</button>
-          </div>
-
           <div id="auxPanel" class="auxPanel">
             <details id="rangeDetails" class="range">
               <summary>Practice range (五十音)</summary>
               <div class="rangeBody">
                 <div class="rangeActions">
+                  <label class="control">
+                    <span>Script</span>
+                    <select id="scriptMode">
+                      <option value="hiragana">Hiragana</option>
+                      <option value="katakana">Katakana</option>
+                      <option value="both" selected>Both</option>
+                    </select>
+                  </label>
+
                   <label class="control">
                     <span>Focus</span>
                     <select id="focusMode">

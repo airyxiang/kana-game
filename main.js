@@ -13,11 +13,11 @@ const resetBtn = document.getElementById("resetBtn");
 const scriptModeEl = document.getElementById("scriptMode");
 const showHintsEl = document.getElementById("showHints");
 const lengthOnlyEl = document.getElementById("lengthOnly");
+const practiceOnlyEl = document.getElementById("practiceOnly");
+const fallSpeedEl = document.getElementById("fallSpeed");
 const hitsGoalEl = document.getElementById("hitsGoal");
 const missLimitEl = document.getElementById("missLimit");
 const subtitleEl = document.getElementById("subtitle");
-const romajiInput = document.getElementById("romajiInput");
-const clearInputBtn = document.getElementById("clearInputBtn");
 const rangeDetailsEl = document.getElementById("rangeDetails");
 const selectAllBtn = document.getElementById("selectAllBtn");
 const selectNoneBtn = document.getElementById("selectNoneBtn");
@@ -63,6 +63,18 @@ function clampInt(value, min, max, fallback) {
     return fallback;
   }
   return clamp(n, min, max);
+}
+
+function clampFloat(value, min, max, fallback) {
+  const n = Number.parseFloat(String(value));
+  if (Number.isNaN(n)) {
+    return fallback;
+  }
+  return clamp(n, min, max);
+}
+
+function shouldRecordScoredStats() {
+  return !game.practiceOnly;
 }
 
 function pickRandom(arr) {
@@ -366,6 +378,8 @@ function loadSettings() {
         scriptMode: "both",
         showHints: false,
         lengthOnly: false,
+        practiceOnly: false,
+        fallSpeed: 1.0,
         hitsToClear: 50,
         missesToFail: 10,
         focusMode: "gojuon",
@@ -384,6 +398,8 @@ function loadSettings() {
       scriptMode: parsed.scriptMode || "both",
       showHints: Boolean(parsed.showHints),
       lengthOnly: Boolean(parsed.lengthOnly),
+      practiceOnly: Boolean(parsed.practiceOnly),
+      fallSpeed: clampFloat(parsed.fallSpeed, 0.5, 3, 1.0),
       hitsToClear: clampInt(parsed.hitsToClear, 1, 999, 50),
       missesToFail: clampInt(parsed.missesToFail, 1, 999, 10),
       focusMode:
@@ -404,6 +420,8 @@ function loadSettings() {
       scriptMode: "both",
       showHints: false,
       lengthOnly: false,
+      practiceOnly: false,
+      fallSpeed: 1.0,
       hitsToClear: 50,
       missesToFail: 10,
       focusMode: "gojuon",
@@ -464,7 +482,7 @@ function createEmptyProfileData(name) {
     createdAt: iso,
     updatedAt: iso,
     stats: {},
-    totals: { hits: 0, misses: 0, typos: 0 },
+    totals: { hits: 0, misses: 0, typos: 0, practiceAttempts: 0 },
   };
 }
 
@@ -476,6 +494,7 @@ function normalizeProfileData(raw, nameFallback) {
     hits: clampInt(totalsRaw.hits, 0, 1_000_000_000, 0),
     misses: clampInt(totalsRaw.misses, 0, 1_000_000_000, 0),
     typos: clampInt(totalsRaw.typos, 0, 1_000_000_000, 0),
+    practiceAttempts: clampInt(totalsRaw.practiceAttempts, 0, 1_000_000_000, 0),
   };
   const createdAt = typeof raw?.createdAt === "string" ? raw.createdAt : new Date().toISOString();
   const updatedAt = new Date().toISOString();
@@ -705,6 +724,42 @@ function resizeCanvas() {
 const bgCanvas = document.createElement("canvas");
 const bgCtx = bgCanvas.getContext("2d");
 
+function drawPerspectiveGrid(context, rect) {
+  const horizonY = rect.height * 0.22;
+  const bottomY = rect.height;
+  const vanishX = rect.width * 0.5;
+  const vanishY = horizonY;
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.strokeStyle = "rgba(255,255,255,0.045)";
+  context.lineWidth = 1;
+
+  const half = Math.floor(rect.width / 70);
+  const span = rect.width * 0.72;
+  for (let i = -half; i <= half; i += 1) {
+    const u = half === 0 ? 0 : i / half;
+    const xBottom = vanishX + u * span;
+    context.beginPath();
+    context.moveTo(xBottom, bottomY);
+    context.lineTo(vanishX, vanishY);
+    context.stroke();
+  }
+
+  const rows = 22;
+  const exp = 0.58;
+  for (let i = 1; i <= rows; i += 1) {
+    const t = i / rows;
+    const y = horizonY + (bottomY - horizonY) * (1 - Math.pow(t, exp));
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(rect.width, y);
+    context.stroke();
+  }
+
+  context.restore();
+}
+
 function renderStaticBackground() {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -719,21 +774,7 @@ function renderStaticBackground() {
   bgCtx.fillStyle = g;
   bgCtx.fillRect(0, 0, rect.width, rect.height);
 
-  const gridStep = 48;
-  bgCtx.strokeStyle = "rgba(255,255,255,0.04)";
-  bgCtx.lineWidth = 1;
-  for (let x = 0; x < rect.width; x += gridStep) {
-    bgCtx.beginPath();
-    bgCtx.moveTo(x, 0);
-    bgCtx.lineTo(x, rect.height);
-    bgCtx.stroke();
-  }
-  for (let y = 0; y < rect.height; y += gridStep) {
-    bgCtx.beginPath();
-    bgCtx.moveTo(0, y);
-    bgCtx.lineTo(rect.width, y);
-    bgCtx.stroke();
-  }
+  drawPerspectiveGrid(bgCtx, rect);
 
   const vignette = bgCtx.createRadialGradient(
     rect.width * 0.5,
@@ -757,10 +798,6 @@ function setMessage(text, kind = "") {
   // eslint-disable-next-line no-unused-expressions
   messageEl.offsetWidth;
   messageEl.classList.add("bump");
-}
-
-function setInputInvalid(isInvalid) {
-  romajiInput.classList.toggle("invalid", isInvalid);
 }
 
 function applyAlpha(color, multiplier) {
@@ -853,8 +890,9 @@ function drawFlash(rect, dt) {
 
 function formatProfileSummary(profile, limit = 6) {
   const totals = profile.totals || { hits: 0, misses: 0, typos: 0 };
-  const attempts = (totals.hits || 0) + (totals.misses || 0);
-  const accuracy = attempts ? ((totals.hits / attempts) * 100).toFixed(1) : "—";
+  const scoredAttempts = (totals.hits || 0) + (totals.misses || 0);
+  const accuracy = scoredAttempts ? ((totals.hits / scoredAttempts) * 100).toFixed(1) : "—";
+  const practiceAttempts = totals.practiceAttempts || 0;
 
   const entries = Object.entries(profile.stats || {})
     .filter(([, v]) => v && (v.missed || v.typos))
@@ -876,8 +914,9 @@ function formatProfileSummary(profile, limit = 6) {
 
   return [
     `Profile: ${profile.name}`,
-    `Attempts: ${attempts} (hit ${totals.hits}, miss ${totals.misses}, typo ${totals.typos})`,
+    `Scored: ${scoredAttempts} (hit ${totals.hits}, miss ${totals.misses}, typo ${totals.typos})`,
     `Accuracy: ${accuracy}%`,
+    `Practice-only attempts: ${practiceAttempts}`,
     mistakesLine,
   ].join("\n");
 }
@@ -887,6 +926,9 @@ function randomId() {
 }
 
 function difficultyLevel() {
+  if (game.practiceOnly) {
+    return 1;
+  }
   return game.lengthOnly ? 1 : game.level;
 }
 
@@ -931,9 +973,17 @@ const game = {
   targetId: null,
   finished: false,
   modalOpen: false,
+  input: "",
+  inputValid: true,
   profileId: "default",
-  profile: { name: "Default", stats: {}, totals: { hits: 0, misses: 0, typos: 0 } },
+  profile: {
+    name: "Default",
+    stats: {},
+    totals: { hits: 0, misses: 0, typos: 0, practiceAttempts: 0 },
+  },
   lengthOnly: false,
+  practiceOnly: false,
+  fallSpeed: 1.0,
   hitsToClear: 50,
   missesToFail: 10,
   practice: {
@@ -949,6 +999,9 @@ const game = {
 };
 
 function bumpTokenStats(tokens, field) {
+  if (!shouldRecordScoredStats()) {
+    return;
+  }
   for (const t of tokens) {
     ensureStat(game.profile.stats, t)[field] += 1;
   }
@@ -992,6 +1045,8 @@ function persistSettings() {
     scriptMode: scriptModeEl.value,
     showHints: showHintsEl.checked,
     lengthOnly: game.lengthOnly,
+    practiceOnly: game.practiceOnly,
+    fallSpeed: game.fallSpeed,
     hitsToClear: game.hitsToClear,
     missesToFail: game.missesToFail,
     focusMode: game.practice.focusMode,
@@ -1004,7 +1059,31 @@ function persistSettings() {
 }
 
 function updateSubtitle() {
-  subtitleEl.textContent = `Type romaji to clear falling kana · ${game.hitsToClear} hits/level · ${game.missesToFail} misses fail · Enter clears · Space pauses`;
+  const mode = game.practiceOnly
+    ? "Practice-only"
+    : game.lengthOnly
+      ? "Length-only"
+      : "Standard";
+  const target = game.practiceOnly
+    ? "endless · fixed L1"
+    : `${game.hitsToClear} hits/level · ${game.missesToFail} misses fail`;
+  subtitleEl.textContent = `Mode: ${mode} · ${target} · Speed x${game.fallSpeed.toFixed(1)} · Enter clears · Space pauses`;
+}
+
+function updateModeUi() {
+  const disabled = game.practiceOnly;
+  hitsGoalEl.disabled = disabled;
+  missLimitEl.disabled = disabled;
+  lengthOnlyEl.disabled = disabled;
+  if (disabled) {
+    hitsGoalEl.title = "Disabled in practice-only mode";
+    missLimitEl.title = "Disabled in practice-only mode";
+    lengthOnlyEl.title = "Disabled in practice-only mode";
+  } else {
+    hitsGoalEl.title = "";
+    missLimitEl.title = "";
+    lengthOnlyEl.title = "";
+  }
 }
 
 function topMistakeMonos(stats, limit) {
@@ -1143,9 +1222,9 @@ function renderProfileSelect() {
 function updateHud() {
   levelLabel.textContent = String(game.level);
   hitsLabel.textContent = String(game.hits);
-  hitsGoalLabel.textContent = String(game.hitsToClear);
+  hitsGoalLabel.textContent = game.practiceOnly ? "∞" : String(game.hitsToClear);
   missesLabel.textContent = String(game.misses);
-  missLimitLabel.textContent = String(game.missesToFail);
+  missLimitLabel.textContent = game.practiceOnly ? "∞" : String(game.missesToFail);
   const target = game.drops.find((d) => d.id === game.targetId);
   targetLabel.textContent = target ? `${target.kana} → ${target.romaji}` : "—";
   const summary = formatProfileSummary(game.profile);
@@ -1189,7 +1268,6 @@ function closeModal() {
   levelModalEl.setAttribute("aria-hidden", "true");
   modalPrimaryAction = null;
   modalSecondaryAction = null;
-  keepInputFocused();
 }
 
 function openModal({
@@ -1213,14 +1291,14 @@ function openModal({
 }
 
 function startLevel(level) {
-  game.level = clamp(level, 1, MAX_LEVEL);
+  game.level = game.practiceOnly ? 1 : clamp(level, 1, MAX_LEVEL);
   game.hits = 0;
   game.misses = 0;
   game.spawnAccMs = 0;
   game.finished = false;
   clearAllDrops();
-  romajiInput.value = "";
-  setInputInvalid(false);
+  game.input = "";
+  game.inputValid = true;
   setMessage(`Ready for Level ${game.level}. Press Start.`, "");
   startPauseBtn.disabled = false;
   updateHud();
@@ -1260,8 +1338,8 @@ function endAsFailed() {
 function endAsCleared() {
   setRunning(false, { silent: true });
   clearAllDrops();
-  romajiInput.value = "";
-  setInputInvalid(false);
+  game.input = "";
+  game.inputValid = true;
   startPauseBtn.disabled = true;
 
   const clearedLevel = game.level;
@@ -1303,7 +1381,8 @@ function endAsCleared() {
 }
 
 function spawnOne() {
-  const kana = buildKanaString(game.level, game.profile.stats, game.practice);
+  const genLevel = game.practiceOnly ? 1 : game.level;
+  const kana = buildKanaString(genLevel, game.profile.stats, game.practice);
   const tokens = kanaToTokens(kana);
   const romaji = kanaToRomaji(kana);
   const rect = canvas.getBoundingClientRect();
@@ -1322,7 +1401,7 @@ function spawnOne() {
     romaji,
     x,
     y: -fontSize - 8,
-    speed: baseSpeedForLevel(difficulty) * (0.9 + Math.random() * 0.3),
+    speed: baseSpeedForLevel(difficulty) * game.fallSpeed * (0.9 + Math.random() * 0.3),
     fontSize,
     createdAt: nowMs(),
   };
@@ -1349,13 +1428,17 @@ function spawnBatch() {
 function dropMissed(drop) {
   game.misses += 1;
   bumpTokenStats(drop.tokens, "missed");
-  game.profile.totals.misses += 1;
+  if (game.practiceOnly) {
+    game.profile.totals.practiceAttempts += 1;
+  } else {
+    game.profile.totals.misses += 1;
+  }
   saveActiveProfileFromGame();
   enqueueBurst(drop, "rgba(255,77,109,0.95)");
   enqueueFlash("rgba(255,77,109,0.09)");
   enqueueShake(180, 6);
 
-  if (game.misses >= game.missesToFail) {
+  if (!game.practiceOnly && game.misses >= game.missesToFail) {
     endAsFailed();
   } else {
     setMessage(`Missed: ${drop.kana} (${drop.romaji})`, "danger");
@@ -1365,13 +1448,17 @@ function dropMissed(drop) {
 function dropHit(drop) {
   game.hits += 1;
   bumpTokenStats(drop.tokens, "hit");
-  game.profile.totals.hits += 1;
+  if (game.practiceOnly) {
+    game.profile.totals.practiceAttempts += 1;
+  } else {
+    game.profile.totals.hits += 1;
+  }
   saveActiveProfileFromGame();
   enqueueBurst(drop, "rgba(45,212,191,0.95)");
   enqueueFlash("rgba(45,212,191,0.08)");
   setMessage(`Hit: ${drop.kana} (${drop.romaji})`, "ok");
 
-  if (game.hits >= game.hitsToClear) {
+  if (!game.practiceOnly && game.hits >= game.hitsToClear) {
     endAsCleared();
   }
 }
@@ -1384,9 +1471,9 @@ function recomputeTarget(prefix) {
 }
 
 function onInputChanged() {
-  const value = romajiInput.value.trim().toLowerCase();
+  const value = game.input.trim().toLowerCase();
   if (!value) {
-    setInputInvalid(false);
+    game.inputValid = true;
     game.targetId = null;
     updateHud();
     return;
@@ -1394,11 +1481,11 @@ function onInputChanged() {
 
   const target = game.drops.find((d) => d.id === game.targetId);
   if (target && target.romaji.startsWith(value)) {
-    setInputInvalid(false);
+    game.inputValid = true;
     updateHud();
   } else {
     recomputeTarget(value);
-    setInputInvalid(game.targetId === null);
+    game.inputValid = game.targetId !== null;
     updateHud();
   }
 
@@ -1406,8 +1493,8 @@ function onInputChanged() {
   if (finalTarget && finalTarget.romaji === value) {
     game.drops = game.drops.filter((d) => d.id !== finalTarget.id);
     dropHit(finalTarget);
-    romajiInput.value = "";
-    setInputInvalid(false);
+    game.input = "";
+    game.inputValid = true;
     game.targetId = null;
     updateHud();
   }
@@ -1436,7 +1523,7 @@ function togglePauseHotkey() {
 }
 
 function registerTypo() {
-  const value = romajiInput.value.trim().toLowerCase();
+  const value = game.input.trim().toLowerCase();
   if (!value) {
     return;
   }
@@ -1448,13 +1535,16 @@ function registerTypo() {
   const nearest = [...game.drops].sort((a, b) => b.y - a.y)[0];
   if (nearest) {
     bumpTokenStats(nearest.tokens, "typos");
-    game.profile.totals.typos += 1;
-    saveActiveProfileFromGame();
+    if (!game.practiceOnly) {
+      game.profile.totals.typos += 1;
+      saveActiveProfileFromGame();
+    }
     updateHud();
   }
 }
 
 function drawBackground(rect, ts) {
+  ctx.clearRect(0, 0, rect.width, rect.height);
   ctx.drawImage(bgCanvas, 0, 0, rect.width, rect.height);
 
   const t = ts / 1000;
@@ -1470,12 +1560,12 @@ function drawBackground(rect, ts) {
 
 function drawDrops(rect, ts) {
   const showHints = showHintsEl.checked;
-  const prefix = romajiInput.value.trim().toLowerCase();
+  const prefix = game.input.trim().toLowerCase();
   const targetId = game.targetId;
   const bottomY = rect.height - 78;
   const warnSeconds = 3;
   const warnY = clamp(
-    bottomY - baseSpeedForLevel(difficultyLevel()) * warnSeconds,
+    bottomY - baseSpeedForLevel(difficultyLevel()) * game.fallSpeed * warnSeconds,
     16,
     bottomY - 16
   );
@@ -1533,6 +1623,54 @@ function drawDrops(rect, ts) {
   ctx.stroke();
 }
 
+function roundedRectPath(context, x, y, w, h, r) {
+  const radius = clamp(r, 0, Math.min(w, h) / 2);
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.lineTo(x + w - radius, y);
+  context.quadraticCurveTo(x + w, y, x + w, y + radius);
+  context.lineTo(x + w, y + h - radius);
+  context.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  context.lineTo(x + radius, y + h);
+  context.quadraticCurveTo(x, y + h, x, y + h - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+}
+
+function drawTypedInput(rect) {
+  const text = game.input;
+  if (!text) {
+    return;
+  }
+  const target = game.drops.find((d) => d.id === game.targetId);
+  const fontSize = target ? target.fontSize : 26;
+  const bottomY = rect.height - 78;
+  const y = bottomY - 30;
+
+  ctx.save();
+  ctx.font = `800 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+  const w = ctx.measureText(text).width;
+  const padX = 12;
+  const padY = 10;
+  const boxW = w + padX * 2;
+  const boxH = fontSize + padY * 2;
+  const x = rect.width * 0.5 - boxW * 0.5;
+  const boxY = y - fontSize - padY;
+  const valid = game.inputValid;
+
+  roundedRectPath(ctx, x, boxY, boxW, boxH, 14);
+  ctx.fillStyle = valid ? "rgba(0,0,0,0.35)" : "rgba(80,0,10,0.42)";
+  ctx.fill();
+  ctx.strokeStyle = valid ? "rgba(255,255,255,0.18)" : "rgba(255,77,109,0.45)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = valid ? "rgba(255,255,255,0.92)" : "rgba(255,77,109,0.95)";
+  ctx.fillText(text, x + padX, y);
+  ctx.restore();
+}
+
 function tick(ts) {
   if (!game.running) {
     return;
@@ -1563,7 +1701,7 @@ function tick(ts) {
   }
   game.drops = remaining;
 
-  const inputPrefix = romajiInput.value.trim().toLowerCase();
+  const inputPrefix = game.input.trim().toLowerCase();
   if (inputPrefix) {
     const currentTarget = game.drops.find((d) => d.id === game.targetId);
     if (!currentTarget || !currentTarget.romaji.startsWith(inputPrefix)) {
@@ -1589,6 +1727,7 @@ function tick(ts) {
   ctx.translate(shakeX, shakeY);
   drawDrops(rect, ts);
   drawEffects(dt);
+  drawTypedInput(rect);
   ctx.restore();
   drawFlash(rect, dt);
   updateHud();
@@ -1596,14 +1735,7 @@ function tick(ts) {
   requestAnimationFrame(tick);
 }
 
-function keepInputFocused() {
-  if (game.modalOpen) {
-    return;
-  }
-  if (document.activeElement !== romajiInput) {
-    romajiInput.focus({ preventScroll: true });
-  }
-}
+function keepInputFocused() {}
 
 function isUiControlTarget(target) {
   if (!(target instanceof Element)) {
@@ -1622,7 +1754,7 @@ function isUiControlTarget(target) {
   if (["select", "option", "button", "summary"].includes(tag)) {
     return true;
   }
-  if (tag === "input" && target !== romajiInput) {
+  if (tag === "input") {
     return true;
   }
   return false;
@@ -1642,6 +1774,10 @@ function init() {
   showHintsEl.checked = settings.showHints;
   lengthOnlyEl.checked = Boolean(settings.lengthOnly);
   game.lengthOnly = Boolean(settings.lengthOnly);
+  practiceOnlyEl.checked = Boolean(settings.practiceOnly);
+  game.practiceOnly = Boolean(settings.practiceOnly);
+  game.fallSpeed = clampFloat(settings.fallSpeed, 0.5, 3, 1.0);
+  fallSpeedEl.value = String(game.fallSpeed);
   game.hitsToClear = clampInt(settings.hitsToClear, 1, 999, 50);
   game.missesToFail = clampInt(settings.missesToFail, 1, 999, 10);
   hitsGoalEl.value = String(game.hitsToClear);
@@ -1669,6 +1805,7 @@ function init() {
   updateSubtitle();
   updateHud();
   updatePracticeAvailability();
+  updateModeUi();
 
   scriptModeEl.addEventListener("change", () => {
     persistSettings();
@@ -1685,6 +1822,29 @@ function init() {
     persistSettings();
     keepInputFocused();
   });
+  practiceOnlyEl.addEventListener("change", () => {
+    if (game.running) {
+      practiceOnlyEl.checked = game.practiceOnly;
+      setMessage("Pause the game to change practice mode.", "danger");
+      return;
+    }
+    game.practiceOnly = practiceOnlyEl.checked;
+    persistSettings();
+    updateModeUi();
+    startLevel(1);
+    updatePracticeAvailability();
+    keepInputFocused();
+  });
+
+  const onFallSpeedChanged = () => {
+    game.fallSpeed = clampFloat(fallSpeedEl.value, 0.5, 3, 1.0);
+    fallSpeedEl.value = String(game.fallSpeed);
+    persistSettings();
+    updateSubtitle();
+    keepInputFocused();
+  };
+  fallSpeedEl.addEventListener("change", onFallSpeedChanged);
+  fallSpeedEl.addEventListener("blur", onFallSpeedChanged);
   focusModeEl.addEventListener("change", () => {
     game.practice.focusMode = focusModeEl.value;
     persistSettings();
@@ -1746,7 +1906,7 @@ function init() {
       return;
     }
     game.profile.stats = {};
-    game.profile.totals = { hits: 0, misses: 0, typos: 0 };
+    game.profile.totals = { hits: 0, misses: 0, typos: 0, practiceAttempts: 0 };
     saveActiveProfileFromGame();
     updateHud();
     updatePracticeAvailability();
@@ -1834,7 +1994,7 @@ function init() {
     persistSettings();
     updateHud();
     updateSubtitle();
-    if (game.running) {
+    if (game.running && !game.practiceOnly) {
       if (game.hits >= game.hitsToClear) {
         endAsCleared();
       } else if (game.misses >= game.missesToFail) {
@@ -1911,56 +2071,6 @@ function init() {
     startLevel(1);
     keepInputFocused();
   });
-
-  clearInputBtn.addEventListener("click", () => {
-    romajiInput.value = "";
-    setInputInvalid(false);
-    game.targetId = null;
-    updateHud();
-    keepInputFocused();
-  });
-
-  romajiInput.addEventListener("input", () => {
-    keepInputFocused();
-    onInputChanged();
-  });
-
-  romajiInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      romajiInput.value = "";
-      setInputInvalid(false);
-      game.targetId = null;
-      updateHud();
-      keepInputFocused();
-      return;
-    }
-    if (e.key === " ") {
-      e.preventDefault();
-      e.stopPropagation();
-      togglePauseHotkey();
-      return;
-    }
-    if (e.key.length === 1) {
-      setTimeout(registerTypo, 0);
-    }
-  });
-
-  romajiInput.addEventListener("blur", () => {
-    setTimeout(() => {
-      if (document.activeElement && isUiControlTarget(document.activeElement)) {
-        return;
-      }
-      keepInputFocused();
-    }, 0);
-  });
-
-  document.addEventListener("pointerdown", (e) => {
-    const target = e.target;
-    if (!isUiControlTarget(target)) {
-      keepInputFocused();
-    }
-  });
   document.addEventListener("keydown", (e) => {
     if (game.modalOpen) {
       if (e.key === "Enter" && typeof modalPrimaryAction === "function") {
@@ -1972,18 +2082,45 @@ function init() {
       }
       return;
     }
-    if (e.code === "Space" && !isUiControlTarget(e.target)) {
-      e.preventDefault();
-      togglePauseHotkey();
-      return;
-    }
     if (isUiControlTarget(e.target)) {
       return;
     }
     if (document.activeElement && isUiControlTarget(document.activeElement)) {
       return;
     }
-    keepInputFocused();
+
+    if (e.code === "Space") {
+      e.preventDefault();
+      togglePauseHotkey();
+      return;
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      game.input = "";
+      game.inputValid = true;
+      game.targetId = null;
+      updateHud();
+      return;
+    }
+
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      if (game.input) {
+        game.input = game.input.slice(0, -1);
+        onInputChanged();
+      }
+      return;
+    }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      return;
+    }
+    if (e.key.length === 1 && /^[a-zA-Z]$/.test(e.key)) {
+      game.input += e.key.toLowerCase();
+      onInputChanged();
+      setTimeout(registerTypo, 0);
+    }
   });
 
   startLevel(1);
