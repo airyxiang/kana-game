@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kana Typing Game</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="title">Kana Typing Game</div>
+          <div class="subtitle" id="subtitle"></div>
+        </div>
+
+        <div class="controls">
+          <label class="control">
+            <span>Script</span>
+            <select id="scriptMode">
+              <option value="hiragana">Hiragana</option>
+              <option value="katakana">Katakana</option>
+              <option value="both" selected>Both</option>
+            </select>
+          </label>
+
+          <label class="control checkbox">
+            <input id="showHints" type="checkbox" />
+            <span>Show romaji</span>
+          </label>
+
+          <label class="control checkbox">
+            <input id="lengthOnly" type="checkbox" />
+            <span>Length-only (no speed up)</span>
+          </label>
+
+          <label class="control">
+            <span>Hits/level</span>
+            <input id="hitsGoal" type="number" min="1" max="999" step="1" />
+          </label>
+
+          <label class="control">
+            <span>Miss limit</span>
+            <input id="missLimit" type="number" min="1" max="999" step="1" />
+          </label>
+
+          <button id="startPauseBtn" class="btn primary" type="button">
+            Start
+          </button>
+          <button id="resetBtn" class="btn" type="button">Reset</button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <canvas id="gameCanvas" aria-label="Game canvas"></canvas>
+        <div class="hud">
+          <div class="pill">
+            Level <span id="levelLabel">1</span>/6
+          </div>
+          <div class="pill">
+            Hits <span id="hitsLabel">0</span>/<span id="hitsGoalLabel">50</span>
+          </div>
+          <div class="pill">
+            Misses <span id="missesLabel">0</span>/<span id="missLimitLabel">10</span>
+          </div>
+          <div class="pill">
+            Target <span id="targetLabel">—</span>
+          </div>
+        </div>
+
+        <div class="bottom">
+          <div class="inputRow">
+            <input
+              id="romajiInput"
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Type romaji here…"
+              inputmode="latin"
+            />
+            <button id="clearInputBtn" class="btn" type="button">Clear</button>
+          </div>
+
+          <div id="auxPanel" class="auxPanel">
+            <details id="rangeDetails" class="range">
+              <summary>Practice range (五十音)</summary>
+              <div class="rangeBody">
+                <div class="rangeActions">
+                  <label class="control">
+                    <span>Focus</span>
+                    <select id="focusMode">
+                      <option value="gojuon" selected>Selected rows</option>
+                      <option value="mistakes">My mistakes</option>
+                      <option value="confusable">Confusables</option>
+                    </select>
+                  </label>
+                  <label class="control" id="mistakesTopNWrap">
+                    <span>Top mistakes</span>
+                    <input id="mistakesTopN" type="number" min="3" max="60" step="1" />
+                  </label>
+                  <label class="control" id="confusablePresetWrap">
+                    <span>Set</span>
+                    <select id="confusablePreset"></select>
+                  </label>
+
+                  <button id="selectAllBtn" class="btn" type="button">All</button>
+                  <button id="selectNoneBtn" class="btn" type="button">None</button>
+                  <label class="rangeToggle">
+                    <input id="enableYouon" type="checkbox" checked />
+                    <span>Yōon (きゃ etc.)</span>
+                  </label>
+                  <label class="rangeToggle">
+                    <input id="enableSokuon" type="checkbox" checked />
+                    <span>Sokuon (っ)</span>
+                  </label>
+                </div>
+                <div class="focusPreview" id="focusPreview"></div>
+                <div id="gojuonGrid" class="gojuonGrid"></div>
+              </div>
+            </details>
+
+            <details id="profileDetails" class="range">
+              <summary>Profile (local)</summary>
+              <div class="rangeBody">
+                <div class="rangeActions">
+                  <label class="control">
+                    <span>Active</span>
+                    <select id="profileSelect"></select>
+                  </label>
+                  <button id="newProfileBtn" class="btn" type="button">New</button>
+                  <button id="exportProfileBtn" class="btn" type="button">Export JSON</button>
+                  <button id="importProfileBtn" class="btn" type="button">Import JSON</button>
+                  <button id="resetProfileBtn" class="btn" type="button">Reset Stats</button>
+                  <input
+                    id="importProfileFile"
+                    type="file"
+                    accept="application/json"
+                    hidden
+                  />
+                </div>
+                <div class="profileMeta" id="profileMeta"></div>
+              </div>
+            </details>
+
+            <div class="message" id="message"></div>
+            <div class="stats" id="stats"></div>
+          </div>
+        </div>
+
+        <div id="levelModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+          <div class="modalCard" role="document">
+            <div class="modalTitle" id="modalTitle">Level Cleared</div>
+            <div class="modalBody" id="modalBody"></div>
+            <div class="modalActions">
+              <button id="modalSecondaryBtn" class="btn" type="button">Reset</button>
+              <button id="modalPrimaryBtn" class="btn primary" type="button">
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="main.js"></script>
+  </body>
+</html>
