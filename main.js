@@ -57,6 +57,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+const FLOOR_PADDING_PX = 14;
+
+function floorY(rect) {
+  return rect.height - FLOOR_PADDING_PX;
+}
+
 function clampInt(value, min, max, fallback) {
   const n = Number.parseInt(String(value), 10);
   if (Number.isNaN(n)) {
@@ -724,6 +730,53 @@ function resizeCanvas() {
 const bgCanvas = document.createElement("canvas");
 const bgCtx = bgCanvas.getContext("2d");
 
+function getTimeTheme(date = new Date()) {
+  const minutes = date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+  const phase = (minutes / 1440) * Math.PI * 2;
+  const night = (Math.cos(phase) + 1) / 2; // 1 at midnight, 0 at noon
+  const day = 1 - night;
+
+  const hour = minutes / 60;
+  const dawn = Math.exp(-Math.pow((hour - 6) / 1.8, 2));
+  const dusk = Math.exp(-Math.pow((hour - 18) / 1.8, 2));
+  const warm = clamp(dawn + dusk, 0, 1);
+
+  const hue = 222 + day * 10 - warm * 20;
+  const sat = 54 + day * 8;
+  const topL = 6.5 + day * 3.5 + warm * 1.2;
+  const bottomL = 3.8 + day * 2.6 + warm * 0.9;
+
+  const skyTop = `hsl(${hue.toFixed(1)}, ${sat.toFixed(1)}%, ${topL.toFixed(1)}%)`;
+  const skyBottom = `hsl(${(hue - 6).toFixed(1)}, ${(sat + 2).toFixed(1)}%, ${bottomL.toFixed(1)}%)`;
+
+  const gridAlpha = 0.022 + day * 0.012;
+  const vignetteOuter = 0.46 + night * 0.1;
+  const starAlpha = 0.32 + night * 0.68;
+
+  const glowA = `rgba(124,92,255,${(0.06 + night * 0.06 + warm * 0.02).toFixed(3)})`;
+  const glowB = `rgba(45,212,191,${(0.035 + day * 0.04).toFixed(3)})`;
+  const warmGlow = `rgba(255,145,90,${(warm * 0.055).toFixed(3)})`;
+
+  const pageBg = `hsl(${(hue - 6).toFixed(1)}, ${(sat - 12).toFixed(1)}%, ${(3.2 + day * 2.2).toFixed(1)}%)`;
+
+  return {
+    minuteKey: Math.floor(minutes),
+    skyTop,
+    skyBottom,
+    gridAlpha,
+    vignetteOuter,
+    starAlpha,
+    glowA,
+    glowB,
+    warmGlow,
+    pageBg,
+  };
+}
+
+function applyThemeToPage(theme) {
+  document.documentElement.style.setProperty("--bg", theme.pageBg);
+}
+
 function drawPerspectiveGrid(context, rect) {
   const horizonY = rect.height * 0.22;
   const bottomY = rect.height;
@@ -732,7 +785,8 @@ function drawPerspectiveGrid(context, rect) {
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = "rgba(255,255,255,0.045)";
+  const alpha = game.theme ? game.theme.gridAlpha : 0.04;
+  context.strokeStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
   context.lineWidth = 1;
 
   const half = Math.floor(rect.width / 70);
@@ -751,16 +805,102 @@ function drawPerspectiveGrid(context, rect) {
   for (let i = 1; i <= rows; i += 1) {
     const t = i / rows;
     const y = horizonY + (bottomY - horizonY) * (1 - Math.pow(t, exp));
-    context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(rect.width, y);
-    context.stroke();
+    const depth = clamp((y - horizonY) / Math.max(1, bottomY - horizonY), 0, 1);
+    const seg = 4 + 10 * depth;
+    for (let j = -half; j <= half; j += 1) {
+      const u = half === 0 ? 0 : j / half;
+      const x = vanishX + u * span * depth;
+      context.beginPath();
+      context.moveTo(x - seg * 0.5, y);
+      context.lineTo(x + seg * 0.5, y);
+      context.stroke();
+    }
   }
 
   context.restore();
 }
 
-function renderStaticBackground() {
+function generateStars(rect) {
+  const area = rect.width * rect.height;
+  const count = clamp(Math.floor(area / 6500), 80, 320);
+  const stars = [];
+  for (let i = 0; i < count; i += 1) {
+    const x = Math.random();
+    const y = Math.random();
+    const isBig = Math.random() < 0.07;
+    const r = isBig ? 1.4 + Math.random() * 2.2 : 0.55 + Math.random() * 1.35;
+    const base = isBig ? 0.55 + Math.random() * 0.5 : 0.22 + Math.random() * 0.68;
+    const tw = 2.0 + Math.random() * 6.0;
+    const tw2 = 7.0 + Math.random() * 9.0;
+    const ph = Math.random() * Math.PI * 2;
+    const ph2 = Math.random() * Math.PI * 2;
+    const tint = Math.random();
+    const color =
+      tint < 0.72
+        ? "rgba(255,255,255,1)"
+        : tint < 0.88
+          ? "rgba(200,220,255,1)"
+          : "rgba(255,230,200,1)";
+    stars.push({ x, y, r, base, tw, tw2, ph, ph2, color, isBig });
+  }
+  game.stars = stars;
+}
+
+function drawStars(rect, ts) {
+  if (!game.stars || game.stars.length === 0) {
+    return;
+  }
+  const theme = game.theme || getTimeTheme();
+  const a = theme.starAlpha;
+  if (a <= 0.01) {
+    return;
+  }
+  const t = ts / 1000;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (const s of game.stars) {
+    const tw1 = 0.55 + 0.45 * Math.sin(t * s.tw + s.ph);
+    const tw2 = 0.75 + 0.25 * Math.sin(t * s.tw2 + s.ph2);
+    const spark = s.isBig ? 0.65 + 0.35 * Math.sin(t * (s.tw * 0.72) + s.ph * 0.7) : 1;
+    const alpha = clamp(s.base * a * tw1 * tw2 * spark, 0, 1);
+    if (alpha <= 0.01) {
+      continue;
+    }
+    const x = s.x * rect.width;
+    const y = s.y * rect.height;
+    const r = s.r * (0.92 + 0.16 * tw1);
+    const core = applyAlpha(s.color, alpha);
+    const halo = applyAlpha(s.color, alpha * (s.isBig ? 0.25 : 0.12));
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * (s.isBig ? 3.0 : 2.2));
+    g.addColorStop(0, core);
+    g.addColorStop(0.38, core);
+    g.addColorStop(1, halo.replace(/rgba\\(([^)]+)\\)/, (m, inner) => {
+      const parts = inner.split(",").map((p) => p.trim());
+      const rgb = parts.slice(0, 3).join(",");
+      return `rgba(${rgb},0)`;
+    }));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r * (s.isBig ? 2.2 : 1.8), 0, Math.PI * 2);
+    ctx.fill();
+
+    if (s.isBig && alpha > 0.22) {
+      const spike = alpha * 0.55;
+      ctx.strokeStyle = applyAlpha(s.color, spike);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - r * 2.6, y);
+      ctx.lineTo(x + r * 2.6, y);
+      ctx.moveTo(x, y - r * 2.6);
+      ctx.lineTo(x, y + r * 2.6);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function renderStaticBackground({ regenStars = false } = {}) {
+  const theme = game.theme || getTimeTheme();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   bgCanvas.width = canvas.width;
@@ -769,9 +909,12 @@ function renderStaticBackground() {
 
   bgCtx.clearRect(0, 0, rect.width, rect.height);
   const g = bgCtx.createLinearGradient(0, 0, 0, rect.height);
-  g.addColorStop(0, "rgba(255,255,255,0.04)");
-  g.addColorStop(1, "rgba(255,255,255,0.00)");
+  g.addColorStop(0, theme.skyTop);
+  g.addColorStop(1, theme.skyBottom);
   bgCtx.fillStyle = g;
+  bgCtx.fillRect(0, 0, rect.width, rect.height);
+
+  bgCtx.fillStyle = "rgba(0,0,0,0.16)";
   bgCtx.fillRect(0, 0, rect.width, rect.height);
 
   drawPerspectiveGrid(bgCtx, rect);
@@ -785,9 +928,13 @@ function renderStaticBackground() {
     rect.height * 0.95
   );
   vignette.addColorStop(0, "rgba(0,0,0,0)");
-  vignette.addColorStop(1, "rgba(0,0,0,0.35)");
+  vignette.addColorStop(1, `rgba(0,0,0,${theme.vignetteOuter.toFixed(3)})`);
   bgCtx.fillStyle = vignette;
   bgCtx.fillRect(0, 0, rect.width, rect.height);
+
+  if (regenStars) {
+    generateStars(rect);
+  }
 }
 
 function setMessage(text, kind = "") {
@@ -1244,10 +1391,8 @@ function setRunning(running, options = {}) {
   const silent = Boolean(options.silent);
   document.body.classList.toggle("running", running);
   resizeCanvas();
-  renderStaticBackground();
+  renderStaticBackground({ regenStars: false });
   if (running) {
-    game.lastTime = nowMs();
-    requestAnimationFrame(tick);
     setMessage(`Level ${game.level} in progress…`, "");
     if (rangeDetailsEl.open) {
       rangeDetailsEl.open = false;
@@ -1544,25 +1689,40 @@ function registerTypo() {
 }
 
 function drawBackground(rect, ts) {
+  const theme = game.theme || getTimeTheme();
   ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.save();
+  ctx.globalAlpha = 0.5;
   ctx.drawImage(bgCanvas, 0, 0, rect.width, rect.height);
+  ctx.restore();
+  drawStars(rect, ts);
 
   const t = ts / 1000;
   const cx = rect.width * (0.3 + 0.07 * Math.sin(t * 0.22));
   const cy = rect.height * (0.22 + 0.06 * Math.cos(t * 0.18));
   const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rect.height * 0.9);
-  glow.addColorStop(0, "rgba(124,92,255,0.08)");
-  glow.addColorStop(0.55, "rgba(45,212,191,0.05)");
+  glow.addColorStop(0, theme.glowA);
+  glow.addColorStop(0.55, theme.glowB);
   glow.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, rect.width, rect.height);
+
+  if (theme.warmGlow !== "rgba(255,145,90,0.000)") {
+    const wx = rect.width * (0.64 + 0.06 * Math.cos(t * 0.13));
+    const wy = rect.height * 0.28;
+    const warm = ctx.createRadialGradient(wx, wy, 0, wx, wy, rect.height * 0.75);
+    warm.addColorStop(0, theme.warmGlow);
+    warm.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = warm;
+    ctx.fillRect(0, 0, rect.width, rect.height);
+  }
 }
 
 function drawDrops(rect, ts) {
   const showHints = showHintsEl.checked;
   const prefix = game.input.trim().toLowerCase();
   const targetId = game.targetId;
-  const bottomY = rect.height - 78;
+  const bottomY = floorY(rect);
   const warnSeconds = 3;
   const warnY = clamp(
     bottomY - baseSpeedForLevel(difficultyLevel()) * game.fallSpeed * warnSeconds,
@@ -1614,13 +1774,6 @@ function drawDrops(rect, ts) {
       ctx.fillText(d.romaji, d.x, d.y + 16 + bob);
     }
   }
-
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, rect.height - 74);
-  ctx.lineTo(rect.width, rect.height - 74);
-  ctx.stroke();
 }
 
 function roundedRectPath(context, x, y, w, h, r) {
@@ -1645,7 +1798,7 @@ function drawTypedInput(rect) {
   }
   const target = game.drops.find((d) => d.id === game.targetId);
   const fontSize = target ? target.fontSize : 26;
-  const bottomY = rect.height - 78;
+  const bottomY = floorY(rect);
   const y = bottomY - 30;
 
   ctx.save();
@@ -1671,46 +1824,8 @@ function drawTypedInput(rect) {
   ctx.restore();
 }
 
-function tick(ts) {
-  if (!game.running) {
-    return;
-  }
+function drawScene(ts, dt) {
   const rect = canvas.getBoundingClientRect();
-  const dt = (ts - game.lastTime) / 1000;
-  game.lastTime = ts;
-
-  game.spawnAccMs += dt * 1000;
-  const interval = spawnIntervalMsForLevel(difficultyLevel());
-  while (game.spawnAccMs >= interval) {
-    game.spawnAccMs -= interval;
-    spawnBatch();
-  }
-
-  const bottomY = rect.height - 78;
-  const remaining = [];
-  for (const d of game.drops) {
-    d.y += d.speed * dt;
-    if (d.y >= bottomY) {
-      dropMissed(d);
-      if (!game.running) {
-        return;
-      }
-    } else {
-      remaining.push(d);
-    }
-  }
-  game.drops = remaining;
-
-  const inputPrefix = game.input.trim().toLowerCase();
-  if (inputPrefix) {
-    const currentTarget = game.drops.find((d) => d.id === game.targetId);
-    if (!currentTarget || !currentTarget.romaji.startsWith(inputPrefix)) {
-      recomputeTarget(inputPrefix);
-    }
-  } else {
-    game.targetId = null;
-  }
-
   const shakeRemaining = game.shake.untilMs - ts;
   const shakeActive = shakeRemaining > 0 && game.shake.durationMs > 0;
   let shakeX = 0;
@@ -1731,8 +1846,59 @@ function tick(ts) {
   ctx.restore();
   drawFlash(rect, dt);
   updateHud();
+}
 
-  requestAnimationFrame(tick);
+function frame(ts) {
+  const theme = getTimeTheme();
+  if (!game.theme || theme.minuteKey !== game.theme.minuteKey) {
+    game.theme = theme;
+    applyThemeToPage(theme);
+    renderStaticBackground({ regenStars: false });
+  }
+  const rect = canvas.getBoundingClientRect();
+  const dt = clamp((ts - game.lastTime) / 1000, 0, 0.05);
+  game.lastTime = ts;
+  const dtGame = game.running ? dt : 0;
+
+  if (game.running) {
+    game.spawnAccMs += dtGame * 1000;
+    const interval = spawnIntervalMsForLevel(difficultyLevel());
+    while (game.spawnAccMs >= interval) {
+      game.spawnAccMs -= interval;
+      spawnBatch();
+    }
+
+    const bottomY = floorY(rect);
+    const remaining = [];
+    for (const d of game.drops) {
+      d.y += d.speed * dtGame;
+      if (d.y >= bottomY) {
+        dropMissed(d);
+        if (!game.running) {
+          drawScene(ts, dt);
+          requestAnimationFrame(frame);
+          return;
+        }
+      } else {
+        remaining.push(d);
+      }
+    }
+    game.drops = remaining;
+  }
+
+  const inputPrefix = game.input.trim().toLowerCase();
+  if (inputPrefix) {
+    const currentTarget = game.drops.find((d) => d.id === game.targetId);
+    if (!currentTarget || !currentTarget.romaji.startsWith(inputPrefix)) {
+      recomputeTarget(inputPrefix);
+    }
+  } else {
+    game.targetId = null;
+  }
+
+  drawScene(ts, dt);
+
+  requestAnimationFrame(frame);
 }
 
 function keepInputFocused() {}
@@ -1762,8 +1928,11 @@ function isUiControlTarget(target) {
 
 function init() {
   const onResize = () => {
+    game.theme = getTimeTheme();
+    applyThemeToPage(game.theme);
     resizeCanvas();
-    renderStaticBackground();
+    renderStaticBackground({ regenStars: true });
+    drawScene(nowMs(), 0);
   };
   onResize();
   window.addEventListener("resize", onResize);
@@ -2124,8 +2293,9 @@ function init() {
   });
 
   startLevel(1);
-  drawBackground(canvas.getBoundingClientRect(), nowMs());
-  keepInputFocused();
+  drawScene(nowMs(), 0);
+  game.lastTime = nowMs();
+  requestAnimationFrame(frame);
 
   modalPrimaryBtn.addEventListener("click", () => {
     if (typeof modalPrimaryAction === "function") {
