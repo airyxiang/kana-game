@@ -198,6 +198,10 @@ body {
   display: block;
 }
 
+#gameCanvas:focus {
+  outline: none;
+}
+
 .hud {
   position: absolute;
   top: 12px;

@@ -1397,6 +1397,7 @@ function setRunning(running, options = {}) {
     if (rangeDetailsEl.open) {
       rangeDetailsEl.open = false;
     }
+    focusGameArea();
   } else {
     if (wasRunning && !game.finished && !silent) {
       setMessage("Paused.", "");
@@ -1901,7 +1902,26 @@ function frame(ts) {
   requestAnimationFrame(frame);
 }
 
-function keepInputFocused() {}
+function focusGameArea() {
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    return;
+  }
+  if (game.modalOpen) {
+    return;
+  }
+  try {
+    canvas.focus({ preventScroll: true });
+  } catch {
+    canvas.focus();
+  }
+}
+
+function keepInputFocused() {
+  if (!game.running) {
+    return;
+  }
+  focusGameArea();
+}
 
 function isUiControlTarget(target) {
   if (!(target instanceof Element)) {
@@ -1936,6 +1956,7 @@ function init() {
   };
   onResize();
   window.addEventListener("resize", onResize);
+  canvas.addEventListener("pointerdown", () => focusGameArea());
 
   const settings = loadSettings();
   loadActiveProfileIntoGame();
